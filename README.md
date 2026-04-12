@@ -54,7 +54,7 @@ Market Data  ◄──────────┤  Matching Engine              
 | Lock-free queues | `common/lf_queue.h` | Inter-thread communication without mutex overhead |
 | Custom memory pool | `common/mem_pool.h` | Pre-allocated memory to avoid malloc/new latency |
 | CPU affinity | `common/thread_utils.h` | Pin threads to specific cores to reduce context switches |
-| Kernel-level I/O | `common/tcp_server.cpp` | epoll (Linux) / kqueue (macOS) for efficient socket polling |
+| Kernel-level I/O | `common/tcp_server.cpp` | epoll for efficient socket polling |
 | Cache-friendly data | Packed structs, array-based order book | Minimize cache misses on hot paths |
 | RDTSC timing | `common/perf_utils.h` | CPU cycle-level latency measurement |
 | Async logging | `common/logging.h` | Non-blocking log writes to avoid I/O stalls on hot paths |
@@ -67,7 +67,7 @@ Market Data  ◄──────────┤  Matching Engine              
 │   ├── mem_pool.h          # Fixed-size memory pool allocator
 │   ├── thread_utils.h      # Thread creation with CPU affinity
 │   ├── logging.h           # Low-latency async logger
-│   ├── tcp_server.h/cpp    # TCP server with epoll/kqueue
+│   ├── tcp_server.h/cpp    # TCP server with epoll
 │   ├── mcast_socket.h/cpp  # UDP multicast socket
 │   ├── time_utils.h        # Nanosecond timestamp utilities
 │   └── perf_utils.h        # RDTSC cycle counter
@@ -116,16 +116,13 @@ Market Data  ◄──────────┤  Matching Engine              
 
 ### Prerequisites
 
-- C++20 compatible compiler (g++ or clang++)
+- Linux (Ubuntu 22.04 recommended)
+- C++20 compatible compiler (g++)
 - CMake >= 3.10
 - Ninja build system
 
 ```bash
-# Install on Ubuntu
 sudo apt install -y cmake ninja-build g++
-
-# Install on macOS
-brew install cmake ninja gcc
 ```
 
 ### Build
@@ -196,32 +193,24 @@ Results are written to log files in the project directory:
 | `trading_engine_*.log` | Strategy decisions, positions, PnL |
 | `trading_order_gateway_*.log` | Order submission and responses |
 
-## macOS Compatibility
+## Deployment
 
-The original codebase targets Linux. The following adaptations were made for macOS (Apple Silicon):
+Deployed on AWS EC2 (Ubuntu 22.04, x86_64) to leverage Linux-native low-latency features:
 
-| Component | Linux | macOS |
-|---|---|---|
-| I/O multiplexing | epoll | kqueue |
-| CPU affinity | `pthread_setaffinity_np` | Mach `thread_policy_set` |
-| Cycle counter | `rdtsc` (x86) | `cntvct_el0` (ARM) |
-| `pthread_t` type | `unsigned long` | pointer (needs cast) |
-| `sockaddr_in` init | aggregate initialization | field-by-field assignment |
-| `MSG_NOSIGNAL` | supported | not available |
-| `sprintf` | allowed | deprecated (use `snprintf`) |
-
-All changes use `#ifdef __APPLE__` with original Linux code preserved in comments.
+- `epoll` for kernel-level I/O multiplexing
+- `pthread_setaffinity_np` for CPU core pinning
+- `rdtsc` for CPU cycle-level latency measurement
 
 ## Roadmap
 
 - [x] Core trading system (matching engine, order book, strategies)
-- [x] macOS compatibility
+- [x] AWS deployment
 - [ ] Historical data replay engine
 - [ ] Backtesting with fill simulation and PnL tracking
 - [ ] Custom strategy: order book imbalance
 - [ ] Performance benchmarks with latency analysis
-- [ ] AWS deployment
+- [ ] Binance historical data integration
 
 ## Acknowledgments
 
-Based on *Building Low-Latency Applications with C++* by Sourav Ghosh. Extended with macOS portability, additional strategies, and backtesting infrastructure.
+Based on *Building Low-Latency Applications with C++* by Sourav Ghosh. Extended with backtesting infrastructure, additional strategies, and historical data replay.
