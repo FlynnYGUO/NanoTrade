@@ -1,0 +1,6 @@
+build/
+cmake-build-release/
+cmake-build-debug/
+*.log
+.venv/
+benchmarks/results/*.csv
