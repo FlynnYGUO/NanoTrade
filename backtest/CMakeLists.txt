@@ -8,5 +8,6 @@ include_directories(${PROJECT_SOURCE_DIR}/trading)
 
 add_library(libbacktest STATIC
     lobster_replay.cpp
+    binance_aggtrades_replay.cpp
     fill_simulator.cpp
     equity_recorder.cpp)

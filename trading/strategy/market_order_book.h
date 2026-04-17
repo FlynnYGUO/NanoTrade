@@ -111,7 +111,14 @@ namespace Trading {
       price_orders_at_price_.at(priceToIndex(new_orders_at_price->price_)) = new_orders_at_price;
 
       const auto best_orders_by_price = (new_orders_at_price->side_ == Side::BUY ? bids_by_price_ : asks_by_price_);
-      if (UNLIKELY(!best_orders_by_price)) {
+      // Defensive: if the cached best pointer is dangling / self-inconsistent (e.g., a
+      // node whose next_entry_ has been nulled but whose `best` handle wasn't updated),
+      // treat the side as empty. This was observed under high-frequency CANCEL+ADD churn
+      // from the Binance synthetic-book replay feeding the book in microseconds; the
+      // linked-list invariants in the pre-existing order-book code are not robust to that
+      // churn. Proper fix is to replace the array-mod hash with std::unordered_map and
+      // tighten the linked-list bookkeeping, which is Phase 1.3 work.
+      if (UNLIKELY(!best_orders_by_price || !best_orders_by_price->next_entry_)) {
         (new_orders_at_price->side_ == Side::BUY ? bids_by_price_ : asks_by_price_) = new_orders_at_price;
         new_orders_at_price->prev_entry_ = new_orders_at_price->next_entry_ = new_orders_at_price;
       } else {

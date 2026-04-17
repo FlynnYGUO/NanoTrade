@@ -239,15 +239,81 @@ Deployed on AWS EC2 (Ubuntu 22.04, x86_64) to leverage Linux-native low-latency 
 - `pthread_setaffinity_np` for CPU core pinning
 - `rdtsc` for CPU cycle-level latency measurement
 
+## Backtesting
+
+The same TradeEngine / MarketOrderBook / Strategy / OrderManager / PositionKeeper that
+runs live also runs under a replay harness in [backtest/](backtest/) — only the edges
+differ. `MarketDataConsumer` gets a `replay_incremental_queue` construction overload that
+reads `MDPMarketUpdate`s from an in-process queue (fed by a CSV parser) instead of UDP
+multicast; `OrderGateway`'s TCP leg is replaced by `FillSimulator`, an in-process
+matching stub that executes aggressive orders against the next tick's opposite side with
+qty truncation. No strategy code is modified.
+
+```
+[Replay] -> replay_queue -> [MarketDataConsumer (replay mode)]
+                                           |
+                           incoming_md_updates_ queue
+                                           |
+                                   [TradeEngine]
+                        |                                     |
+           outgoing_ogw_requests_ queue           incoming_ogw_responses_ queue
+                        |                                     ^
+                  [FillSimulator] ---------------------------/
+                        |
+                [PositionKeeper] <- [EquityRecorder] -> equity.csv
+```
+
+### Data sources
+
+- **LOBSTER** — NASDAQ sample (`scripts/download_lobster.sh`). 10-level L2 + full message
+  stream for AAPL/AMZN/GOOG/INTC/MSFT, 2012-06-21, one trading day each. Free, but one-day
+  samples only. Good for engine validation and queue-position work (Phase 1.3).
+- **Binance Spot aggTrades** (`scripts/download_binance.sh`). Every trade + `is_buyer_maker`
+  flag; ~7 MB zip per day, ~200 MB per month for BTCUSDT. L2 depth is not published by
+  Binance, so `BinanceAggTradesReplay` synthesizes a top-of-book from the aggressor flag.
+  Good for multi-month statistical metrics.
+
+### Run it
+
+```bash
+./scripts/download_lobster.sh                         # AAPL 2012-06-21 L2 sample
+./build/backtest_main \
+  --data-format lobster \
+  --data data/lobster/AAPL/AAPL_2012-06-21_34200000_57600000_message_10.csv \
+  --equity-csv benchmarks/backtest/lobster/equity.csv
+
+./scripts/download_binance.sh BTCUSDT 2025-10 monthly # 40M aggTrades, ~3.3 GB csv
+./build/backtest_main \
+  --data-format binance-aggtrades \
+  --data data/binance/spot/aggTrades/BTCUSDT/BTCUSDT-aggTrades-2025-10.csv \
+  --clip 100 --threshold 0.05 --max-pos 100000 \
+  --equity-csv benchmarks/backtest/binance/equity.csv
+```
+
+Analysis notebooks:
+[notebooks/backtest_lobster.ipynb](notebooks/backtest_lobster.ipynb) and
+[notebooks/backtest_binance.ipynb](notebooks/backtest_binance.ipynb) read `equity.csv`
+and render PnL curves, drawdown, and fill-rate metrics.
+
+### Current results (Phase 1.2 MVP)
+
+The default LiquidityTaker rarely fires on either data set — not a bug in the engine but
+a feature of an aggressive-take signal that seldom crosses its threshold on these feeds.
+Statistically-meaningful Sharpe / drawdown / turnover numbers are a Phase 1.3 deliverable
+(MarketMaker + queue-aware fills on LOBSTER; OBI signal on synthetic L1 for Binance).
+
+![LOBSTER equity curve](benchmarks/backtest/lobster/equity_curve.png)
+
 ## Roadmap
 
 - [x] Core trading system (matching engine, order book, strategies)
 - [x] AWS deployment
-- [ ] Historical data replay engine
-- [ ] Backtesting with fill simulation and PnL tracking
-- [ ] Custom strategy: order book imbalance
-- [ ] Performance benchmarks with latency analysis
-- [ ] Binance historical data integration
+- [x] Latency benchmark + CPU-pinned release build (sub-200 ns p99 order insert)
+- [x] Historical data replay engine (LOBSTER + Binance aggTrades)
+- [x] Fill simulation + PnL / equity curve tracking
+- [ ] Queue-position-aware fill simulator (Phase 1.3)
+- [ ] Custom strategy: order book imbalance (OBI) on LOBSTER L2
+- [ ] Multi-month statistical backtest with Sharpe / drawdown
 
 ## Acknowledgments
 

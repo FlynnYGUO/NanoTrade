@@ -25,10 +25,12 @@ namespace Common {
   /// Maximum price level depth in the order books. Used as the modulus of the price-hash
   /// in MarketOrderBook / MEOrderBook — two prices that are multiples of this constant apart
   /// collide and silently corrupt the book (pre-existing design assumes small integer
-  /// prices). 256K covers equity ranges scaled by 10^4 up to ~$26 daily span (LOBSTER AAPL
-  /// 2012-06-21 spans ~$11 = 110K units; 256K gives 2.5x headroom). Synthetic integer
-  /// prices used by benchmarks stay well within bounds too.
-  constexpr size_t ME_MAX_PRICE_LEVELS = 256 * 1024;
+  /// prices). 2M covers:
+  ///   - LOBSTER equity scaled by 10^4 with ~$200 daily span
+  ///   - Binance BTCUSDT scaled by 10^2 (cents) with ~$20K monthly span (Oct 2025: ~$12K)
+  /// A proper fix would replace the array-mod hash with std::unordered_map, but that's a
+  /// wider refactor — 2M buys enough headroom for both data sources.
+  constexpr size_t ME_MAX_PRICE_LEVELS = 2 * 1024 * 1024;
 
   typedef uint64_t OrderId;
   constexpr auto OrderId_INVALID = std::numeric_limits<OrderId>::max();

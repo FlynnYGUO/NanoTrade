@@ -16,6 +16,7 @@
 #include "trading/strategy/trade_engine.h"
 
 #include "backtest/lobster_replay.h"
+#include "backtest/binance_aggtrades_replay.h"
 #include "backtest/fill_simulator.h"
 #include "backtest/equity_recorder.h"
 
@@ -123,23 +124,41 @@ int main(int argc, char **argv) {
 
   // Launch the replay AFTER everything downstream is running so we don't drop events.
   std::unique_ptr<Backtest::LobsterReplay> lobster_replay;
+  std::unique_ptr<Backtest::BinanceAggTradesReplay> binance_replay;
+  auto replay_finished = [&]() -> bool {
+    if (lobster_replay) return lobster_replay->finished();
+    if (binance_replay) return binance_replay->finished();
+    return true;
+  };
+
   if (args.data_format == "lobster") {
     std::cout << "Starting LobsterReplay on " << args.data_path << "\n";
     lobster_replay = std::make_unique<Backtest::LobsterReplay>(
         args.data_path, replay_md_queue.get(), args.ticker_id);
     lobster_replay->start();
+  } else if (args.data_format == "binance-aggtrades") {
+    std::cout << "Starting BinanceAggTradesReplay on " << args.data_path << "\n";
+    binance_replay = std::make_unique<Backtest::BinanceAggTradesReplay>(
+        args.data_path, replay_md_queue.get(), args.ticker_id);
+    binance_replay->start();
   } else {
     std::cerr << "Unknown --data-format " << args.data_format
-              << " (only 'lobster' is supported in this build)\n";
+              << " (expected 'lobster' or 'binance-aggtrades')\n";
     std::exit(1);
   }
 
   // Drive the main thread: wait for replay to signal finished, then drain queues.
-  while (!lobster_replay->finished()) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  while (!replay_finished()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
   }
-  std::cout << "Replay finished: emitted=" << lobster_replay->rowsEmitted()
-            << " skipped=" << lobster_replay->rowsSkipped() << "\n";
+  if (lobster_replay) {
+    std::cout << "Replay finished: emitted=" << lobster_replay->rowsEmitted()
+              << " skipped=" << lobster_replay->rowsSkipped() << "\n";
+  } else {
+    std::cout << "Replay finished: trades=" << binance_replay->tradesProcessed()
+              << " emitted=" << binance_replay->rowsEmitted()
+              << " skipped=" << binance_replay->rowsSkipped() << "\n";
+  }
   std::cout << "Draining queues...\n";
 
   // Wait until all queues are empty (TradeEngine has processed everything).
@@ -152,7 +171,8 @@ int main(int argc, char **argv) {
   }
 
   std::cout << "Drain complete. Stopping threads...\n";
-  lobster_replay->stop();
+  if (lobster_replay) lobster_replay->stop();
+  if (binance_replay) binance_replay->stop();
   recorder->stop();
   fill_sim->stop();
   mdc->stop();
