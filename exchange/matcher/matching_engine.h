@@ -3,6 +3,7 @@
 #include "common/thread_utils.h"
 #include "common/lf_queue.h"
 #include "common/macros.h"
+#include "common/logging.h"
 
 #include "order_server/client_request.h"
 #include "order_server/client_response.h"
@@ -52,7 +53,7 @@ namespace Exchange {
 
     /// Write client responses to the lock free queue for the order server to consume.
     auto sendClientResponse(const MEClientResponse *client_response) noexcept {
-      logger_.log("%:% %() % Sending %\n", __FILE__, __LINE__, __FUNCTION__, Common::getCurrentTimeStr(&time_str_), client_response->toString());
+      NT_LOG(logger_, "%:% %() % Sending %\n", __FILE__, __LINE__, __FUNCTION__, Common::getCurrentTimeStr(&time_str_), client_response->toString());
       auto next_write = outgoing_ogw_responses_->getNextToWriteTo();
       *next_write = std::move(*client_response);
       outgoing_ogw_responses_->updateWriteIndex();
@@ -61,7 +62,7 @@ namespace Exchange {
 
     /// Write market data update to the lock free queue for the market data publisher to consume.
     auto sendMarketUpdate(const MEMarketUpdate *market_update) noexcept {
-      logger_.log("%:% %() % Sending %\n", __FILE__, __LINE__, __FUNCTION__, Common::getCurrentTimeStr(&time_str_), market_update->toString());
+      NT_LOG(logger_, "%:% %() % Sending %\n", __FILE__, __LINE__, __FUNCTION__, Common::getCurrentTimeStr(&time_str_), market_update->toString());
       auto next_write = outgoing_md_updates_->getNextToWriteTo();
       *next_write = *market_update;
       outgoing_md_updates_->updateWriteIndex();
@@ -70,13 +71,13 @@ namespace Exchange {
 
     /// Main loop for this thread - processes incoming client requests which in turn generates client responses and market updates.
     auto run() noexcept {
-      logger_.log("%:% %() %\n", __FILE__, __LINE__, __FUNCTION__, Common::getCurrentTimeStr(&time_str_));
+      NT_LOG(logger_, "%:% %() %\n", __FILE__, __LINE__, __FUNCTION__, Common::getCurrentTimeStr(&time_str_));
       while (run_) {
         const auto me_client_request = incoming_requests_->getNextToRead();
         if (LIKELY(me_client_request)) {
           TTT_MEASURE(T3_MatchingEngine_LFQueue_read, logger_);
 
-          logger_.log("%:% %() % Processing %\n", __FILE__, __LINE__, __FUNCTION__, Common::getCurrentTimeStr(&time_str_),
+          NT_LOG(logger_, "%:% %() % Processing %\n", __FILE__, __LINE__, __FUNCTION__, Common::getCurrentTimeStr(&time_str_),
                       me_client_request->toString());
           START_MEASURE(Exchange_MatchingEngine_processClientRequest);
           processClientRequest(me_client_request);

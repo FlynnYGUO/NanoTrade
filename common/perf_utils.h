@@ -34,22 +34,28 @@ namespace Common {
 #define START_MEASURE(TAG) const auto TAG = Common::rdtsc()
 
 /// End latency measurement using rdtsc(). Expects a variable called TAG to already exist in the local scope.
-#define END_MEASURE(TAG, LOGGER)                                                              \
-      do {                                                                                    \
-        const auto end = Common::rdtsc();                                                     \
-        LOGGER.log("% RDTSC "#TAG" %\n", Common::getCurrentTimeStr(&time_str_), (end - TAG)); \
-      } while(false)
+/// Under NT_BENCHMARK_NO_LOG, compiles to a no-op that still references TAG so the
+/// START_MEASURE-declared variable doesn't trigger -Wunused-variable under -Werror.
+#ifdef NT_BENCHMARK_NO_LOG
+  #define END_MEASURE(TAG, LOGGER) ((void)(TAG))
+  #define TTT_MEASURE(TAG, LOGGER) ((void)0)
+#else
+  #define END_MEASURE(TAG, LOGGER)                                                              \
+        do {                                                                                    \
+          const auto end = Common::rdtsc();                                                     \
+          LOGGER.log("% RDTSC "#TAG" %\n", Common::getCurrentTimeStr(&time_str_), (end - TAG)); \
+        } while(false)
+
+  #define TTT_MEASURE(TAG, LOGGER)                                                              \
+        do {                                                                                    \
+          const auto TAG = Common::getCurrentNanos();                                           \
+          LOGGER.log("% TTT "#TAG" %\n", Common::getCurrentTimeStr(&time_str_), TAG);           \
+        } while(false)
+#endif
 
 /// Record RDTSC delta into a LatencyStats instance (silent, no logging).
 #define MEASURE_AND_RECORD(TAG, STATS)                                                        \
       do {                                                                                    \
         const auto end = Common::rdtsc();                                                     \
         (STATS).record(end - TAG);                                                            \
-      } while(false)
-
-/// Log a current timestamp at the time this macro is invoked.
-#define TTT_MEASURE(TAG, LOGGER)                                                              \
-      do {                                                                                    \
-        const auto TAG = Common::getCurrentNanos();                                           \
-        LOGGER.log("% TTT "#TAG" %\n", Common::getCurrentTimeStr(&time_str_), TAG);           \
       } while(false)

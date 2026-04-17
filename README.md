@@ -172,7 +172,45 @@ bash scripts/run_exchange_and_clients.sh
 ./cmake-build-release/logger_benchmark
 ./cmake-build-release/release_benchmark
 ./cmake-build-release/hash_benchmark
+
+# Latency benchmark — writes CSVs for notebook analysis.
+# latency_benchmark: debug build with in-hot-path logging (baseline).
+# latency_benchmark_release: -O3 -march=native, logging compiled out of ME/OB hot path.
+./build/latency_benchmark          # → benchmarks/results/*.csv
+./build/latency_benchmark_release  # → benchmarks/results/release/*.csv
 ```
+
+**Test machine for published latency numbers**: 12th Gen Intel Core i9-12900K
+(24 threads, 12 cores), Linux (WSL2). Numbers from a different CPU / OS / isolation
+setup are not directly comparable; `-march=native` produces CPU-specific instructions.
+
+## Latency Results
+
+Release build (`latency_benchmark_release`), 500k samples per path, benchmark thread
+pinned to P-core 4. See [notebooks/latency_benchmark_analysis.ipynb](notebooks/latency_benchmark_analysis.ipynb)
+for distribution plots and debug-vs-release comparison.
+
+| Path | p50 | p90 | p99 | p99.9 |
+|---|---|---|---|---|
+| ME `processClientRequest` (mixed, crosses book) | 119 ns | 337 ns | 613 ns | 1.7 µs |
+| ME order add (no-cross, resting) | 84 ns | 89 ns | 172 ns | 1.1 µs |
+
+![Debug vs Release histogram](benchmarks/results/latency_debug_vs_release_hist.png)
+
+**Methodology**:
+
+- Latency captured via `RDTSC` cycle counter (`common/perf_utils.h`) into a fixed-capacity
+  ring-buffer (`common/latency_stats.h`) — no heap allocation on the hot path.
+- Release build strips all hot-path logging via `-DNT_BENCHMARK_NO_LOG`, which compiles
+  `logger_.log()` calls and `END_MEASURE` / `TTT_MEASURE` macros into `(void)0` without
+  evaluating their arguments. Debug build of the same code path measures p50 ~74 µs,
+  so logging overhead dominated the original numbers by ~3 orders of magnitude.
+- Compiled with `-O3 -march=native -DNDEBUG -fno-omit-frame-pointer`.
+
+**Tail caveat**: `max` samples (~140 µs) are WSL2 hypervisor preemption events observed
+during development — the virtual CPU is briefly descheduled by Hyper-V. These are an
+environment artifact, not code latency. A bare-metal EC2 instance with `isolcpus` and
+`SCHED_FIFO` would be expected to tighten the tail by 10-100×.
 
 ### Stop the system
 

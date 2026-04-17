@@ -8,6 +8,7 @@
 #include "common/lf_queue.h"
 #include "common/perf_utils.h"
 #include "common/latency_stats.h"
+#include "common/thread_utils.h"
 
 #include "exchange/matcher/matching_engine.h"
 #include "exchange/order_server/client_request.h"
@@ -16,6 +17,12 @@
 
 using namespace Common;
 using namespace Exchange;
+
+#ifdef NT_BENCHMARK_NO_LOG
+  static constexpr const char *RESULTS_DIR = "benchmarks/results/release";
+#else
+  static constexpr const char *RESULTS_DIR = "benchmarks/results";
+#endif
 
 /// Print a LatencyPercentiles struct in a formatted table row.
 static auto printPercentiles(const char *label, const LatencyPercentiles &p) -> void {
@@ -49,6 +56,19 @@ static auto printHeader() -> void {
 
 int main(int, char **) {
   std::cout << "=== NanoTrade Latency Benchmark ===" << std::endl;
+
+  // Pin the benchmark thread to a P-core (Alder Lake: CPU 0-15 are P-cores).
+  // Reduces tail latency caused by cross-core scheduling and cache migration.
+  // Logger background threads spawned by MatchingEngine use default affinity,
+  // so they remain free to run on other cores away from us.
+  constexpr int BENCHMARK_CORE = 4;
+  if (!Common::setThreadCore(BENCHMARK_CORE)) {
+    std::cerr << "Warning: failed to pin thread to core " << BENCHMARK_CORE
+              << " (continuing unpinned)" << std::endl;
+  } else {
+    std::cout << "Pinned benchmark thread to core " << BENCHMARK_CORE << std::endl;
+  }
+
   std::cout << "Calibrating RDTSC..." << std::endl;
 
   const double nanos_per_cycle = calibrateRdtsc();
@@ -164,10 +184,12 @@ int main(int, char **) {
   std::cout << std::endl;
 
   // --- Dump raw data for notebook ---
-  std::filesystem::create_directories("benchmarks/results");
-  stats_me_total->dumpToCSV("benchmarks/results/me_total_latency.csv", nanos_per_cycle);
-  stats_ob_add->dumpToCSV("benchmarks/results/ob_add_latency.csv", nanos_per_cycle);
-  std::cout << "Raw data written to benchmarks/results/*.csv" << std::endl;
+  std::filesystem::create_directories(RESULTS_DIR);
+  const std::string me_csv = std::string(RESULTS_DIR) + "/me_total_latency.csv";
+  const std::string ob_csv = std::string(RESULTS_DIR) + "/ob_add_latency.csv";
+  stats_me_total->dumpToCSV(me_csv, nanos_per_cycle);
+  stats_ob_add->dumpToCSV(ob_csv, nanos_per_cycle);
+  std::cout << "Raw data written to " << RESULTS_DIR << "/*.csv" << std::endl;
 
   return 0;
 }

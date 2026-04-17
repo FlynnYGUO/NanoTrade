@@ -221,3 +221,13 @@ namespace Common {
     std::thread *logger_thread_ = nullptr;
   };
 }
+
+/// Compile-time switch for stripping logging off hot paths in benchmarks.
+/// When NT_BENCHMARK_NO_LOG is defined (via -DNT_BENCHMARK_NO_LOG), NT_LOG expands
+/// to a no-op — argument expressions are NOT evaluated, so side-effecting calls like
+/// toString() / getCurrentTimeStr() are also eliminated.
+#ifdef NT_BENCHMARK_NO_LOG
+  #define NT_LOG(logger, ...) ((void)0)
+#else
+  #define NT_LOG(logger, ...) (logger).log(__VA_ARGS__)
+#endif

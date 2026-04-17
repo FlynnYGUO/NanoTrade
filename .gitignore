@@ -4,3 +4,5 @@ cmake-build-debug/
 *.log
 .venv/
 benchmarks/results/*.csv
+benchmarks/results/**/*.csv
+benchmarks/results/release/
