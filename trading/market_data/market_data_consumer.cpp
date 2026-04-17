@@ -23,12 +23,57 @@ namespace Trading {
     snapshot_mcast_socket_.recv_callback_ = recv_callback;
   }
 
+  /// Replay-mode constructor — socket members are default-constructed with `logger_` but
+  /// never `init()`d, so their socket_fd_ stays -1 and they're harmless inert. The run()
+  /// loop branches on `replay_incremental_queue_` being non-null.
+  MarketDataConsumer::MarketDataConsumer(Common::ClientId client_id, Exchange::MEMarketUpdateLFQueue *market_updates,
+                                         Exchange::MDPMarketUpdateLFQueue *replay_incremental_queue)
+      : incoming_md_updates_(market_updates), run_(false),
+        logger_("trading_market_data_consumer_" + std::to_string(client_id) + ".log"),
+        incremental_mcast_socket_(logger_), snapshot_mcast_socket_(logger_),
+        iface_(""), snapshot_ip_(""), snapshot_port_(0),
+        replay_incremental_queue_(replay_incremental_queue) {
+  }
+
   /// Main loop for this thread - reads and processes messages from the multicast sockets - the heavy lifting is in the recvCallback() and checkSnapshotSync() methods.
+  /// In replay mode, pulls MDPMarketUpdates from the replay queue and runs them through the
+  /// same dedup / gap-detection pipeline as recvCallback does for live packets.
   auto MarketDataConsumer::run() noexcept -> void {
     logger_.log("%:% %() %\n", __FILE__, __LINE__, __FUNCTION__, Common::getCurrentTimeStr(&time_str_));
     while (run_) {
-      incremental_mcast_socket_.sendAndRecv();
-      snapshot_mcast_socket_.sendAndRecv();
+      if (replay_incremental_queue_) {
+        // Replay mode — drain the queue and treat each entry as an incremental packet.
+        for (auto *request = replay_incremental_queue_->getNextToRead();
+             request; request = replay_incremental_queue_->getNextToRead()) {
+          const bool already_in_recovery = in_recovery_;
+          in_recovery_ = (already_in_recovery || request->seq_num_ != next_exp_inc_seq_num_);
+
+          if (UNLIKELY(in_recovery_)) {
+            // Gap detected — in replay mode there's no snapshot stream to recover from, so
+            // this indicates a data-source bug. Log and drop.
+            logger_.log("%:% %() % Replay gap seq expected:% got:% — dropping.\n",
+                        __FILE__, __LINE__, __FUNCTION__, Common::getCurrentTimeStr(&time_str_),
+                        next_exp_inc_seq_num_, request->seq_num_);
+            in_recovery_ = false;
+            next_exp_inc_seq_num_ = request->seq_num_ + 1;
+          } else {
+            ++next_exp_inc_seq_num_;
+          }
+
+          // Backpressure into te_md_updates_ — yield until TradeEngine drains enough.
+          while (run_ && incoming_md_updates_->size() >= Common::ME_MAX_MARKET_UPDATES * 3 / 4) {
+            std::this_thread::yield();
+          }
+          auto *next_write = incoming_md_updates_->getNextToWriteTo();
+          *next_write = request->me_market_update_;
+          incoming_md_updates_->updateWriteIndex();
+
+          replay_incremental_queue_->updateReadIndex();
+        }
+      } else {
+        incremental_mcast_socket_.sendAndRecv();
+        snapshot_mcast_socket_.sendAndRecv();
+      }
     }
   }
 

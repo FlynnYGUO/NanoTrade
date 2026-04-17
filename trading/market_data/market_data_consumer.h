@@ -13,9 +13,17 @@
 namespace Trading {
   class MarketDataConsumer {
   public:
+    /// Live-trading constructor: subscribes to UDP multicast snapshot + incremental streams.
     MarketDataConsumer(Common::ClientId client_id, Exchange::MEMarketUpdateLFQueue *market_updates, const std::string &iface,
                        const std::string &snapshot_ip, int snapshot_port,
                        const std::string &incremental_ip, int incremental_port);
+
+    /// Replay-mode constructor: reads MDPMarketUpdates from a queue (fed by a backtest replay
+    /// component) instead of the network. Snapshot sync / dedup / gap detection logic is
+    /// identical to the live path, which is what makes this a faithful stand-in for real
+    /// market data flow.
+    MarketDataConsumer(Common::ClientId client_id, Exchange::MEMarketUpdateLFQueue *market_updates,
+                       Exchange::MDPMarketUpdateLFQueue *replay_incremental_queue);
 
     ~MarketDataConsumer() {
       stop();
@@ -70,6 +78,10 @@ namespace Trading {
     /// Containers to queue up market data updates from the snapshot and incremental channels, queued up in order of increasing sequence numbers.
     typedef std::map<size_t, Exchange::MEMarketUpdate> QueuedMarketUpdates;
     QueuedMarketUpdates snapshot_queued_msgs_, incremental_queued_msgs_;
+
+    /// Replay mode: when non-null, run() reads MDPMarketUpdates from this queue instead of
+    /// the multicast sockets. See the replay-mode constructor.
+    Exchange::MDPMarketUpdateLFQueue *replay_incremental_queue_ = nullptr;
 
   private:
     /// Main loop for this thread - reads and processes messages from the multicast sockets - the heavy lifting is in the recvCallback() and checkSnapshotSync() methods.

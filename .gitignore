@@ -6,3 +6,5 @@ cmake-build-debug/
 benchmarks/results/*.csv
 benchmarks/results/**/*.csv
 benchmarks/results/release/
+data/
+benchmarks/backtest/

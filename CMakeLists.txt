@@ -11,7 +11,9 @@ add_subdirectory(common)
 add_subdirectory(exchange)
 add_subdirectory(trading)
 add_subdirectory(benchmarks)
+add_subdirectory(backtest)
 
+list(APPEND LIBS libbacktest)
 list(APPEND LIBS libexchange)
 list(APPEND LIBS libtrading)
 list(APPEND LIBS libcommon)
@@ -44,6 +46,9 @@ target_link_libraries(hash_benchmark PUBLIC ${LIBS})
 
 add_executable(latency_benchmark benchmarks/latency_benchmark.cpp)
 target_link_libraries(latency_benchmark PUBLIC ${LIBS})
+
+add_executable(backtest_main backtest/backtest_main.cpp)
+target_link_libraries(backtest_main PUBLIC ${LIBS})
 
 # Release build of latency_benchmark with hot-path logging compiled out.
 # NT_BENCHMARK_NO_LOG neutralizes NT_LOG, END_MEASURE, and TTT_MEASURE so the

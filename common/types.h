@@ -22,8 +22,13 @@ namespace Common {
   /// Maximum number of orders per trading client.
   constexpr size_t ME_MAX_ORDER_IDS = 1024 * 1024;
 
-  /// Maximum price level depth in the order books.
-  constexpr size_t ME_MAX_PRICE_LEVELS = 256;
+  /// Maximum price level depth in the order books. Used as the modulus of the price-hash
+  /// in MarketOrderBook / MEOrderBook — two prices that are multiples of this constant apart
+  /// collide and silently corrupt the book (pre-existing design assumes small integer
+  /// prices). 256K covers equity ranges scaled by 10^4 up to ~$26 daily span (LOBSTER AAPL
+  /// 2012-06-21 spans ~$11 = 110K units; 256K gives 2.5x headroom). Synthetic integer
+  /// prices used by benchmarks stay well within bounds too.
+  constexpr size_t ME_MAX_PRICE_LEVELS = 256 * 1024;
 
   typedef uint64_t OrderId;
   constexpr auto OrderId_INVALID = std::numeric_limits<OrderId>::max();

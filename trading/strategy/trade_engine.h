@@ -87,6 +87,13 @@ namespace Trading {
       return client_id_;
     }
 
+    /// Read-only accessor for the position keeper — used by the backtest EquityRecorder
+    /// to sample PnL / position without modifying TradeEngine's hot path.
+    auto getPositionKeeper() const noexcept { return &position_keeper_; }
+
+    /// Read-only accessor for the per-ticker market order book.
+    auto getMarketOrderBook(TickerId ticker_id) const noexcept { return ticker_order_book_[ticker_id]; }
+
     /// Deleted default, copy & move constructors and assignment-operators.
     TradeEngine() = delete;
 
