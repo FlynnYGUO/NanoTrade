@@ -16,7 +16,8 @@ namespace Exchange {
   public:
     MatchingEngine(ClientRequestLFQueue *client_requests,
                    ClientResponseLFQueue *client_responses,
-                   MEMarketUpdateLFQueue *market_updates);
+                   MEMarketUpdateLFQueue *market_updates,
+                   const TickerBasePriceHashMap &ticker_base_prices = {});
 
     ~MatchingEngine();
 

@@ -15,7 +15,7 @@ namespace Exchange {
 
   class MEOrderBook final {
   public:
-    explicit MEOrderBook(TickerId ticker_id, Logger *logger, MatchingEngine *matching_engine);
+    explicit MEOrderBook(TickerId ticker_id, Logger *logger, MatchingEngine *matching_engine, Price base_price = 0);
 
     ~MEOrderBook();
 
@@ -67,6 +67,10 @@ namespace Exchange {
 
     OrderId next_market_order_id_ = 1;
 
+    /// Per-book price-array anchor. index = price - base_price_. See ME_MAX_PRICE_LEVELS
+    /// doc in common/types.h.
+    const Price base_price_;
+
     std::string time_str_;
     Logger *logger_ = nullptr;
 
@@ -76,7 +80,13 @@ namespace Exchange {
     }
 
     auto priceToIndex(Price price) const noexcept {
-      return (price % ME_MAX_PRICE_LEVELS);
+      const auto idx = static_cast<int64_t>(price) - static_cast<int64_t>(base_price_);
+      if (UNLIKELY(idx < 0 || static_cast<size_t>(idx) >= ME_MAX_PRICE_LEVELS)) {
+        FATAL("MEOrderBook price " + priceToString(price) +
+              " outside window [base=" + priceToString(base_price_) +
+              " width=" + std::to_string(ME_MAX_PRICE_LEVELS) + ") — bump base_price or widen window");
+      }
+      return static_cast<size_t>(idx);
     }
 
     /// Fetch and return the MEOrdersAtPrice corresponding to the provided price.
@@ -145,9 +155,11 @@ namespace Exchange {
         if (orders_at_price == best_orders_by_price) {
           (side == Side::BUY ? bids_by_price_ : asks_by_price_) = orders_at_price->next_entry_;
         }
-
-        orders_at_price->prev_entry_ = orders_at_price->next_entry_ = nullptr;
       }
+
+      // Null prev/next before the pool reuses this memory (same rationale as the trading
+      // MarketOrderBook — see that file for the long comment).
+      orders_at_price->prev_entry_ = orders_at_price->next_entry_ = nullptr;
 
       price_orders_at_price_.at(priceToIndex(price)) = nullptr;
 

@@ -3,8 +3,9 @@
 #include "trade_engine.h"
 
 namespace Trading {
-  MarketOrderBook::MarketOrderBook(TickerId ticker_id, Logger *logger)
-      : ticker_id_(ticker_id), orders_at_price_pool_(ME_MAX_PRICE_LEVELS), order_pool_(ME_MAX_ORDER_IDS), logger_(logger) {
+  MarketOrderBook::MarketOrderBook(TickerId ticker_id, Logger *logger, Price base_price)
+      : ticker_id_(ticker_id), orders_at_price_pool_(ME_MAX_PRICE_LEVELS), order_pool_(ME_MAX_ORDER_IDS),
+        base_price_(base_price), logger_(logger) {
   }
 
   MarketOrderBook::~MarketOrderBook() {

@@ -22,14 +22,17 @@ namespace Common {
   /// Maximum number of orders per trading client.
   constexpr size_t ME_MAX_ORDER_IDS = 1024 * 1024;
 
-  /// Maximum price level depth in the order books. Used as the modulus of the price-hash
-  /// in MarketOrderBook / MEOrderBook — two prices that are multiples of this constant apart
-  /// collide and silently corrupt the book (pre-existing design assumes small integer
-  /// prices). 2M covers:
-  ///   - LOBSTER equity scaled by 10^4 with ~$200 daily span
-  ///   - Binance BTCUSDT scaled by 10^2 (cents) with ~$20K monthly span (Oct 2025: ~$12K)
-  /// A proper fix would replace the array-mod hash with std::unordered_map, but that's a
-  /// wider refactor — 2M buys enough headroom for both data sources.
+  /// Per-book price-level window width. MarketOrderBook / MEOrderBook index into a dense
+  /// std::array<T*, ME_MAX_PRICE_LEVELS> using (price - base_price_), giving O(1) exact
+  /// lookup with zero collisions as long as prices stay inside [base_price_, base_price_ +
+  /// ME_MAX_PRICE_LEVELS). Phase 1.3A replaced the old `price % N` array-mod hash — that
+  /// design silently corrupted the linked list on any price collision under high-frequency
+  /// CANCEL+ADD churn (Binance synthetic replay exposed it). 2M slots × 8B = 16MB per book.
+  /// Covers:
+  ///   - LOBSTER equity scaled by 10^4 with ~$200 daily span (base ≈ 5,000,000 for AAPL)
+  ///   - Binance BTCUSDT scaled by 10^2 (cents) with ~$20K monthly span (Oct 2025: base ≈ 5,000,000)
+  /// If a price falls outside the window the book FATALs — the caller must pass a
+  /// base_price (via ctor) wide enough for the instrument's realistic range.
   constexpr size_t ME_MAX_PRICE_LEVELS = 2 * 1024 * 1024;
 
   typedef uint64_t OrderId;
@@ -206,4 +209,10 @@ namespace Common {
 
   /// Hash map from TickerId -> TradeEngineCfg.
   typedef std::array<TradeEngineCfg, ME_MAX_TICKERS> TradeEngineCfgHashMap;
+
+  /// Per-ticker base (minimum) price the order book's dense price array is anchored at.
+  /// `index = price - base_price` must land in [0, ME_MAX_PRICE_LEVELS). See comment on
+  /// ME_MAX_PRICE_LEVELS above. Default 0 works for synthetic small-integer prices; real
+  /// datasets (LOBSTER ~5M, Binance cents ~5M) must configure this explicitly.
+  typedef std::array<Price, ME_MAX_TICKERS> TickerBasePriceHashMap;
 }

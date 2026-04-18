@@ -6,7 +6,8 @@ namespace Trading {
                            const TradeEngineCfgHashMap &ticker_cfg,
                            Exchange::ClientRequestLFQueue *client_requests,
                            Exchange::ClientResponseLFQueue *client_responses,
-                           Exchange::MEMarketUpdateLFQueue *market_updates)
+                           Exchange::MEMarketUpdateLFQueue *market_updates,
+                           const TickerBasePriceHashMap &ticker_base_prices)
       : client_id_(client_id), outgoing_ogw_requests_(client_requests), incoming_ogw_responses_(client_responses),
         incoming_md_updates_(market_updates), logger_("trading_engine_" + std::to_string(client_id) + ".log"),
         feature_engine_(&logger_),
@@ -14,7 +15,7 @@ namespace Trading {
         order_manager_(&logger_, this, risk_manager_),
         risk_manager_(&logger_, &position_keeper_, ticker_cfg) {
     for (size_t i = 0; i < ticker_order_book_.size(); ++i) {
-      ticker_order_book_[i] = new MarketOrderBook(i, &logger_);
+      ticker_order_book_[i] = new MarketOrderBook(i, &logger_, ticker_base_prices[i]);
       ticker_order_book_[i]->setTradeEngine(this);
     }
 

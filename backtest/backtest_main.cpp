@@ -37,6 +37,12 @@ namespace {
     Common::Qty max_position = 1000;
     double max_loss = -100000.0;
     std::string equity_csv = "benchmarks/backtest/lobster/equity.csv";
+    /// Per-book price-array anchor. Must be set so all observed prices fall within
+    /// [base_price, base_price + ME_MAX_PRICE_LEVELS). For AAPL LOBSTER 2012-06-21 the
+    /// price range is ~5,800,000–5,830,000 — 5,000,000 gives 200K+ of padding above.
+    /// For Binance BTCUSDT cents in Oct 2025, prices ~5,800,000–7,300,000 — 5,000,000
+    /// fits in a 2M window.
+    Common::Price base_price = 0;
   };
 
   auto parseArgs(int argc, char **argv) -> Args {
@@ -54,6 +60,7 @@ namespace {
       else if (arg == "--threshold") a.threshold = std::stod(next());
       else if (arg == "--max-pos")  a.max_position = std::stoul(next());
       else if (arg == "--equity-csv") a.equity_csv = next();
+      else if (arg == "--base-price") a.base_price = std::stoll(next());
       else {
         std::cerr << "Unknown arg: " << arg << "\n";
         std::exit(1);
@@ -77,6 +84,7 @@ int main(int argc, char **argv) {
             << "clip:       " << args.clip << "\n"
             << "threshold:  " << args.threshold << "\n"
             << "max_pos:    " << args.max_position << "\n"
+            << "base_price: " << args.base_price << "\n"
             << "equity_csv: " << args.equity_csv << "\n\n";
 
   // Queues that tie together the full pipeline.
@@ -93,12 +101,18 @@ int main(int argc, char **argv) {
       {args.max_order_size, args.max_position, args.max_loss}
   };
 
+  // base_price anchors the book's dense price array. One slot per ticker; all other
+  // tickers use 0 since they never see traffic in this backtest.
+  Common::TickerBasePriceHashMap ticker_base_prices{};
+  ticker_base_prices.at(args.ticker_id) = args.base_price;
+
   const Common::ClientId client_id = 1;
 
   std::cout << "Starting TradeEngine (LiquidityTaker)...\n";
   auto trade_engine = std::make_unique<Trading::TradeEngine>(
       client_id, Common::AlgoType::TAKER, ticker_cfg,
-      ogw_requests.get(), ogw_responses.get(), te_md_updates.get());
+      ogw_requests.get(), ogw_responses.get(), te_md_updates.get(),
+      ticker_base_prices);
   trade_engine->start();
 
   // BBO pointer for the FillSimulator. MarketOrderBook is created inside TradeEngine's

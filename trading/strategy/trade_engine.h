@@ -30,7 +30,8 @@ namespace Trading {
                 const TradeEngineCfgHashMap &ticker_cfg,
                 Exchange::ClientRequestLFQueue *client_requests,
                 Exchange::ClientResponseLFQueue *client_responses,
-                Exchange::MEMarketUpdateLFQueue *market_updates);
+                Exchange::MEMarketUpdateLFQueue *market_updates,
+                const TickerBasePriceHashMap &ticker_base_prices = {});
 
     ~TradeEngine();
 

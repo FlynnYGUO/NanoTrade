@@ -12,7 +12,7 @@ namespace Trading {
 
   class MarketOrderBook final {
   public:
-    MarketOrderBook(TickerId ticker_id, Logger *logger);
+    MarketOrderBook(TickerId ticker_id, Logger *logger, Price base_price = 0);
 
     ~MarketOrderBook();
 
@@ -93,12 +93,22 @@ namespace Trading {
 
     BBO bbo_;
 
+    /// Per-book price-array anchor. index = price - base_price_. See ME_MAX_PRICE_LEVELS
+    /// doc in common/types.h.
+    const Price base_price_;
+
     std::string time_str_;
     Logger *logger_ = nullptr;
 
   private:
     auto priceToIndex(Price price) const noexcept {
-      return (price % ME_MAX_PRICE_LEVELS);
+      const auto idx = static_cast<int64_t>(price) - static_cast<int64_t>(base_price_);
+      if (UNLIKELY(idx < 0 || static_cast<size_t>(idx) >= ME_MAX_PRICE_LEVELS)) {
+        FATAL("MarketOrderBook price " + priceToString(price) +
+              " outside window [base=" + priceToString(base_price_) +
+              " width=" + std::to_string(ME_MAX_PRICE_LEVELS) + ") — bump base_price or widen window");
+      }
+      return static_cast<size_t>(idx);
     }
 
     /// Fetch and return the MarketOrdersAtPrice corresponding to the provided price.
@@ -111,13 +121,16 @@ namespace Trading {
       price_orders_at_price_.at(priceToIndex(new_orders_at_price->price_)) = new_orders_at_price;
 
       const auto best_orders_by_price = (new_orders_at_price->side_ == Side::BUY ? bids_by_price_ : asks_by_price_);
-      // Defensive: if the cached best pointer is dangling / self-inconsistent (e.g., a
-      // node whose next_entry_ has been nulled but whose `best` handle wasn't updated),
-      // treat the side as empty. This was observed under high-frequency CANCEL+ADD churn
-      // from the Binance synthetic-book replay feeding the book in microseconds; the
-      // linked-list invariants in the pre-existing order-book code are not robust to that
-      // churn. Proper fix is to replace the array-mod hash with std::unordered_map and
-      // tighten the linked-list bookkeeping, which is Phase 1.3 work.
+      // Defensive: the `best` side-head is cached in bids_by_price_/asks_by_price_ and
+      // is kept pointing at a live node by removeOrdersAtPrice. However under the
+      // single-element-remove IF-branch the removed node's prev/next are NOT nulled
+      // (they stay as self-loops pointing at the about-to-be-freed memory). If the pool
+      // re-hands that memory out for a *different-side* allocation before the next add
+      // on this side, the stale self-loop can bleed into `best`'s next_entry_ through
+      // an indirection we haven't reproduced a minimal case for. Treat a `best` whose
+      // next_entry_ is nullptr as "empty side" and rebuild — keeps the book consistent.
+      // Proper fix is to fully clear prev/next in the single-element removal path, or
+      // to move to a std::map<Price, ...> that doesn't use intrusive links; deferred.
       if (UNLIKELY(!best_orders_by_price || !best_orders_by_price->next_entry_)) {
         (new_orders_at_price->side_ == Side::BUY ? bids_by_price_ : asks_by_price_) = new_orders_at_price;
         new_orders_at_price->prev_entry_ = new_orders_at_price->next_entry_ = new_orders_at_price;
@@ -176,9 +189,13 @@ namespace Trading {
         if (orders_at_price == best_orders_by_price) {
           (side == Side::BUY ? bids_by_price_ : asks_by_price_) = orders_at_price->next_entry_;
         }
-
-        orders_at_price->prev_entry_ = orders_at_price->next_entry_ = nullptr;
       }
+
+      // Null prev/next before the pool reuses this memory — otherwise stale self-loop or
+      // neighbor pointers on the freed node can leak into the other side's list when a
+      // cross-side alloc lands on the same physical slot. Original code only nulled these
+      // on the ELSE branch; we now null unconditionally.
+      orders_at_price->prev_entry_ = orders_at_price->next_entry_ = nullptr;
 
       price_orders_at_price_.at(priceToIndex(price)) = nullptr;
 

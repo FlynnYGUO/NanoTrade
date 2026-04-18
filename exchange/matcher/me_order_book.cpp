@@ -3,9 +3,9 @@
 #include "matcher/matching_engine.h"
 
 namespace Exchange {
-  MEOrderBook::MEOrderBook(TickerId ticker_id, Logger *logger, MatchingEngine *matching_engine)
+  MEOrderBook::MEOrderBook(TickerId ticker_id, Logger *logger, MatchingEngine *matching_engine, Price base_price)
       : ticker_id_(ticker_id), matching_engine_(matching_engine), orders_at_price_pool_(ME_MAX_PRICE_LEVELS), order_pool_(ME_MAX_ORDER_IDS),
-        logger_(logger) {
+        base_price_(base_price), logger_(logger) {
   }
 
   MEOrderBook::~MEOrderBook() {
