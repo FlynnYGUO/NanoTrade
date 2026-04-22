@@ -1,6 +1,6 @@
 # NanoTrade
 
-A low-latency trading system built in C++20, featuring a matching engine, order book, market data distribution, and algorithmic trading strategies with sub-microsecond order processing.
+A low-latency trading system in C++20: matching engine, limit order book, multicast market data, and a backtest harness that runs the production strategy binaries against historical L2 data. Order book insert microbenchmarks at **p50 89 ns / p99 143 ns** on i9-12900K.
 
 ## Overview
 
@@ -10,7 +10,7 @@ NanoTrade is a full-stack electronic trading system that includes:
 - **Order Book** - efficient order management with O(1) operations using custom memory pools
 - **Market Data Publisher** - multicast-based real-time market data distribution
 - **Trading Strategies** - market making and liquidity taking with risk management
-- **Backtesting Infrastructure** - historical replay and strategy evaluation (in progress)
+- **Backtesting Infrastructure** - historical replay with queue-position-aware fill simulation
 
 ## Architecture
 
@@ -216,6 +216,34 @@ during development — the virtual CPU is briefly descheduled by Hyper-V. These 
 environment artifact, not code latency. A bare-metal EC2 instance with `isolcpus` and
 `SCHED_FIFO` would be expected to tighten the tail by 10-100×.
 
+**Scope of these numbers**: the published percentiles are **single-function
+microbenchmarks** (`MarketOrderBook::addOrder()` and `MatchingEngine::processClientRequest()`
+around an RDTSC fence) — not end-to-end tick-to-trade. Real tick-to-trade in a pure-software
+C++ stack on commodity hardware is bounded by NIC + kernel-syscall overhead (~few µs) and
+would require kernel bypass / FPGA to push further; see [Out of Scope](#out-of-scope--known-limitations)
+below.
+
+## Out of Scope / Known Limitations
+
+Techniques intentionally not pursued in this project — listed so it's clear where the
+published software-side numbers sit in the broader latency budget, and what a real
+production build would add on top:
+
+- **Kernel bypass** (DPDK, Solarflare OpenOnload, AF_XDP). `tcp_server.cpp` uses `epoll`,
+  which is fine for strategy-side dev but caps effective tick-to-trade at kernel-syscall
+  overhead. A production HFT tick-to-trade stack runs kernel-bypass + busy-poll.
+- **FPGA offload**. The matching engine hot path (~100 ns in software) drops ~10× further
+  on FPGA with hardware order book + wire-format parser. Out of scope for a software project.
+- **`io_uring` vs. `epoll`**. Interesting tail-latency comparison, but for tick-to-trade
+  the NIC is the dominant term — kernel bypass beats both.
+- **SIMD feature engine**. VWAP / imbalance math is currently scalar. AVX2 path is an
+  obvious next step but wasn't the bottleneck on the benchmarks run here.
+- **Shared-memory IPC** between exchange and strategy for local backtests. Retained TCP
+  path because that's what live production uses.
+- **MPMC lock-free queues**. Current inter-thread queues are SPSC (lower ceiling; right
+  choice for the producer-consumer topology here). MPMC would be needed for a
+  multi-strategy client or a sharded matching engine.
+
 ### Stop the system
 
 ```bash
@@ -284,27 +312,48 @@ qty truncation. No strategy code is modified.
 ./build/backtest_main \
   --data-format lobster \
   --data data/lobster/AAPL/AAPL_2012-06-21_34200000_57600000_message_10.csv \
+  --base-price 5000000 \
   --equity-csv benchmarks/backtest/lobster/equity.csv
 
 ./scripts/download_binance.sh BTCUSDT 2025-10 monthly # 40M aggTrades, ~3.3 GB csv
 ./build/backtest_main \
   --data-format binance-aggtrades \
   --data data/binance/spot/aggTrades/BTCUSDT/BTCUSDT-aggTrades-2025-10.csv \
+  --base-price 10000000 \
   --clip 100 --threshold 0.05 --max-pos 100000 \
   --equity-csv benchmarks/backtest/binance/equity.csv
 ```
+
+CLI flags:
+
+| Flag | Values | Default | Purpose |
+|---|---|---|---|
+| `--algo` | `taker` \| `maker` | `taker` | Strategy to load into TradeEngine (LiquidityTaker vs MarketMaker) |
+| `--fill-mode` | `auto` \| `queue-aware` \| `aggressive` | `auto` | FillSimulator mode. `auto` → `queue-aware` for LOBSTER, `aggressive` for Binance (synthetic L1 has no real resting qty) |
+| `--base-price` | integer | `0` | Anchor for the order book's dense price array; must cover the dataset's price range within `ME_MAX_PRICE_LEVELS` (2M slots) |
 
 Analysis notebooks:
 [notebooks/backtest_lobster.ipynb](notebooks/backtest_lobster.ipynb) and
 [notebooks/backtest_binance.ipynb](notebooks/backtest_binance.ipynb) read `equity.csv`
 and render PnL curves, drawdown, and fill-rate metrics.
 
-### Current results (Phase 1.2 MVP)
+### Current results
 
-The default LiquidityTaker rarely fires on either data set — not a bug in the engine but
-a feature of an aggressive-take signal that seldom crosses its threshold on these feeds.
-Statistically-meaningful Sharpe / drawdown / turnover numbers are a Phase 1.3 deliverable
-(MarketMaker + queue-aware fills on LOBSTER; OBI signal on synthetic L1 for Binance).
+- **Phase 1.2** shipped the replay + aggressive-fill pipeline end-to-end; validated on
+  LOBSTER AAPL 2012-06-21 (one trading day) and Binance BTCUSDT Oct 2025 (1M+ aggTrades).
+- **Phase 1.3.A** replaced the order book's `price % N` modulo hash with a dense
+  `price - base_price` offset — fixed silent linked-list corruption under high-frequency
+  CANCEL+ADD churn that Binance replay exposed. Also cut microbenchmark p99 from 172 ns
+  to 143 ns.
+- **Phase 1.3.B** added queue-position-aware fill simulation: resting orders now track a
+  virtual FIFO position using LOBSTER's per-order priorities, decrement on observed
+  trades/cancels ahead of the order, and fill (partial-aware) once the queue clears.
+
+Statistically-meaningful Sharpe / drawdown / turnover numbers depend on a stateful
+market-making strategy with proper risk-parameter tuning (the current LiquidityTaker is
+aggressive-only by design and the default MarketMaker's PENDING_NEW / PENDING_CANCEL
+FSM produces orders that don't rest long enough to exercise the queue path in volume).
+That strategy work is out of scope for this repo's infrastructure focus.
 
 ![LOBSTER equity curve](benchmarks/backtest/lobster/equity_curve.png)
 
@@ -313,9 +362,10 @@ Statistically-meaningful Sharpe / drawdown / turnover numbers are a Phase 1.3 de
 - [x] Core trading system (matching engine, order book, strategies)
 - [x] AWS deployment
 - [x] Latency benchmark + CPU-pinned release build (sub-200 ns p99 order insert)
+- [x] Order book hash fix — dense `price - base_price` offset (Phase 1.3.A)
 - [x] Historical data replay engine (LOBSTER + Binance aggTrades)
-- [x] Fill simulation + PnL / equity curve tracking
-- [ ] Queue-position-aware fill simulator (Phase 1.3)
+- [x] Queue-position-aware fill simulator (Phase 1.3.B)
+- [ ] Unit-test + CI coverage of hot-path components (Phase 1.4)
 - [ ] Custom strategy: order book imbalance (OBI) on LOBSTER L2
 - [ ] Multi-month statistical backtest with Sharpe / drawdown
 
