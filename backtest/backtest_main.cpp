@@ -37,6 +37,10 @@ namespace {
     Common::Qty max_position = 1000;
     double max_loss = -100000.0;
     std::string equity_csv = "benchmarks/backtest/lobster/equity.csv";
+    std::string algo = "taker";  // "taker" (LiquidityTaker) or "maker" (MarketMaker)
+    /// Override for the FillSimulator mode. Default ("auto") picks QUEUE_AWARE for
+    /// lobster and AGGRESSIVE_ONLY for binance-aggtrades.
+    std::string fill_mode = "auto";
     /// Per-book price-array anchor. Must be set so all observed prices fall within
     /// [base_price, base_price + ME_MAX_PRICE_LEVELS). For AAPL LOBSTER 2012-06-21 the
     /// price range is ~5,800,000–5,830,000 — 5,000,000 gives 200K+ of padding above.
@@ -61,6 +65,8 @@ namespace {
       else if (arg == "--max-pos")  a.max_position = std::stoul(next());
       else if (arg == "--equity-csv") a.equity_csv = next();
       else if (arg == "--base-price") a.base_price = std::stoll(next());
+      else if (arg == "--algo")     a.algo = next();
+      else if (arg == "--fill-mode") a.fill_mode = next();
       else {
         std::cerr << "Unknown arg: " << arg << "\n";
         std::exit(1);
@@ -81,6 +87,7 @@ int main(int argc, char **argv) {
             << "format:     " << args.data_format << "\n"
             << "data:       " << args.data_path << "\n"
             << "ticker:     " << args.ticker_id << "\n"
+            << "algo:       " << args.algo << "\n"
             << "clip:       " << args.clip << "\n"
             << "threshold:  " << args.threshold << "\n"
             << "max_pos:    " << args.max_position << "\n"
@@ -92,6 +99,9 @@ int main(int argc, char **argv) {
   auto te_md_updates   = std::make_unique<Exchange::MEMarketUpdateLFQueue>(Common::ME_MAX_MARKET_UPDATES);
   auto ogw_requests    = std::make_unique<Exchange::ClientRequestLFQueue>(Common::ME_MAX_CLIENT_UPDATES);
   auto ogw_responses   = std::make_unique<Exchange::ClientResponseLFQueue>(Common::ME_MAX_CLIENT_UPDATES);
+  // Tee of the replay stream for FillSimulator's queue-aware mode. Only populated on the
+  // LOBSTER path; Binance runs AGGRESSIVE_ONLY so this queue is created but left unused.
+  auto sim_md_events   = std::make_unique<Exchange::MDPMarketUpdateLFQueue>(Common::ME_MAX_MARKET_UPDATES);
 
   // Trade engine configuration — MVP hardcodes only the target ticker's slot.
   Common::TradeEngineCfgHashMap ticker_cfg{};
@@ -108,9 +118,17 @@ int main(int argc, char **argv) {
 
   const Common::ClientId client_id = 1;
 
-  std::cout << "Starting TradeEngine (LiquidityTaker)...\n";
+  Common::AlgoType algo_type;
+  if (args.algo == "taker") algo_type = Common::AlgoType::TAKER;
+  else if (args.algo == "maker") algo_type = Common::AlgoType::MAKER;
+  else {
+    std::cerr << "Unknown --algo " << args.algo << " (expected 'taker' or 'maker')\n";
+    std::exit(1);
+  }
+
+  std::cout << "Starting TradeEngine (" << Common::algoTypeToString(algo_type) << ")...\n";
   auto trade_engine = std::make_unique<Trading::TradeEngine>(
-      client_id, Common::AlgoType::TAKER, ticker_cfg,
+      client_id, algo_type, ticker_cfg,
       ogw_requests.get(), ogw_responses.get(), te_md_updates.get(),
       ticker_base_prices);
   trade_engine->start();
@@ -121,9 +139,25 @@ int main(int argc, char **argv) {
   ASSERT(book != nullptr, "TradeEngine did not create a MarketOrderBook for the target ticker");
   const Trading::BBO *bbo = book->getBBO();
 
-  std::cout << "Starting FillSimulator...\n";
+  // QUEUE_AWARE only makes sense with real L2 data (LOBSTER). Binance synthetic L1 has no
+  // meaningful resting qty, so stick with AGGRESSIVE_ONLY there. --fill-mode overrides.
+  Backtest::FillMode fill_mode;
+  if (args.fill_mode == "auto") {
+    fill_mode = (args.data_format == "lobster") ? Backtest::FillMode::QUEUE_AWARE
+                                                 : Backtest::FillMode::AGGRESSIVE_ONLY;
+  } else if (args.fill_mode == "queue-aware") fill_mode = Backtest::FillMode::QUEUE_AWARE;
+  else if (args.fill_mode == "aggressive")    fill_mode = Backtest::FillMode::AGGRESSIVE_ONLY;
+  else {
+    std::cerr << "Unknown --fill-mode " << args.fill_mode
+              << " (expected 'auto' | 'queue-aware' | 'aggressive')\n";
+    std::exit(1);
+  }
+  std::cout << "Starting FillSimulator (mode="
+            << (fill_mode == Backtest::FillMode::QUEUE_AWARE ? "QUEUE_AWARE" : "AGGRESSIVE_ONLY")
+            << ")...\n";
   auto fill_sim = std::make_unique<Backtest::FillSimulator>(
-      client_id, ogw_requests.get(), ogw_responses.get(), bbo);
+      client_id, ogw_requests.get(), ogw_responses.get(), bbo,
+      fill_mode, book, sim_md_events.get());
   fill_sim->start();
 
   std::cout << "Starting MarketDataConsumer (replay mode)...\n";
@@ -145,15 +179,20 @@ int main(int argc, char **argv) {
     return true;
   };
 
+  // Only tee the sim-event stream when the FillSimulator will consume it — otherwise the
+  // queue fills and stalls the replay.
+  Exchange::MDPMarketUpdateLFQueue *sim_tee = (fill_mode == Backtest::FillMode::QUEUE_AWARE)
+      ? sim_md_events.get() : nullptr;
+
   if (args.data_format == "lobster") {
     std::cout << "Starting LobsterReplay on " << args.data_path << "\n";
     lobster_replay = std::make_unique<Backtest::LobsterReplay>(
-        args.data_path, replay_md_queue.get(), args.ticker_id);
+        args.data_path, replay_md_queue.get(), args.ticker_id, sim_tee);
     lobster_replay->start();
   } else if (args.data_format == "binance-aggtrades") {
     std::cout << "Starting BinanceAggTradesReplay on " << args.data_path << "\n";
     binance_replay = std::make_unique<Backtest::BinanceAggTradesReplay>(
-        args.data_path, replay_md_queue.get(), args.ticker_id);
+        args.data_path, replay_md_queue.get(), args.ticker_id, sim_tee);
     binance_replay->start();
   } else {
     std::cerr << "Unknown --data-format " << args.data_format
@@ -175,10 +214,11 @@ int main(int argc, char **argv) {
   }
   std::cout << "Draining queues...\n";
 
-  // Wait until all queues are empty (TradeEngine has processed everything).
+  // Wait until all queues are empty (TradeEngine + FillSimulator have processed everything).
   for (int idle_iters = 0; idle_iters < 20; ) {
     const auto busy = replay_md_queue->size() + te_md_updates->size()
-                    + ogw_requests->size() + ogw_responses->size();
+                    + ogw_requests->size() + ogw_responses->size()
+                    + sim_md_events->size();
     if (busy == 0) ++idle_iters;
     else            idle_iters = 0;
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -196,6 +236,7 @@ int main(int argc, char **argv) {
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
   std::cout << "FillSimulator: fills=" << fill_sim->fillsEmitted()
+            << " passive=" << fill_sim->passiveFillsEmitted()
             << " pending=" << fill_sim->pendingCount() << "\n";
 
   recorder->finalize();

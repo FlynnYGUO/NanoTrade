@@ -26,9 +26,14 @@ namespace Backtest {
   /// passed in. All rows are mapped to a single ticker_id supplied at construction.
   class LobsterReplay {
   public:
+    /// `sim_output_queue` is optional: if non-null, every MDPMarketUpdate emitted to
+    /// `output_queue` is also written to `sim_output_queue` (same producer thread, so both
+    /// SPSC writes are safe). Used by FillSimulator's QUEUE_AWARE mode to see the same
+    /// market event stream MarketOrderBook consumes.
     LobsterReplay(const std::string &csv_path,
                   Exchange::MDPMarketUpdateLFQueue *output_queue,
-                  Common::TickerId ticker_id);
+                  Common::TickerId ticker_id,
+                  Exchange::MDPMarketUpdateLFQueue *sim_output_queue = nullptr);
 
     ~LobsterReplay();
 
@@ -49,6 +54,7 @@ namespace Backtest {
     const std::string csv_path_;
     Exchange::MDPMarketUpdateLFQueue *output_queue_;
     const Common::TickerId ticker_id_;
+    Exchange::MDPMarketUpdateLFQueue *sim_output_queue_ = nullptr;
 
     std::thread *thread_ = nullptr;
     volatile bool run_ = false;

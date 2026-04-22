@@ -14,8 +14,10 @@ namespace Backtest {
 
   BinanceAggTradesReplay::BinanceAggTradesReplay(const std::string &csv_path,
                                                  Exchange::MDPMarketUpdateLFQueue *output_queue,
-                                                 Common::TickerId ticker_id)
+                                                 Common::TickerId ticker_id,
+                                                 Exchange::MDPMarketUpdateLFQueue *sim_output_queue)
       : csv_path_(csv_path), output_queue_(output_queue), ticker_id_(ticker_id),
+        sim_output_queue_(sim_output_queue),
         logger_("backtest_binance_aggtrades_replay.log") {
   }
 
@@ -87,15 +89,23 @@ namespace Backtest {
 
     auto push = [&](MEMarketUpdate me) {
       // Backpressure: the SPSC output queue has no overflow check.
-      while (run_ && output_queue_->size() >= Common::ME_MAX_MARKET_UPDATES * 3 / 4) {
+      while (run_ && (output_queue_->size() >= Common::ME_MAX_MARKET_UPDATES * 3 / 4
+                   || (sim_output_queue_ && sim_output_queue_->size() >= Common::ME_MAX_MARKET_UPDATES * 3 / 4))) {
         std::this_thread::yield();
       }
       MDPMarketUpdate mdp{};
       mdp.seq_num_ = seq_num++;
       mdp.me_market_update_ = me;
-      auto *out = output_queue_->getNextToWriteTo();
-      *out = mdp;
-      output_queue_->updateWriteIndex();
+      {
+        auto *out = output_queue_->getNextToWriteTo();
+        *out = mdp;
+        output_queue_->updateWriteIndex();
+      }
+      if (sim_output_queue_) {
+        auto *sim_out = sim_output_queue_->getNextToWriteTo();
+        *sim_out = mdp;
+        sim_output_queue_->updateWriteIndex();
+      }
       ++rows_emitted_;
     };
 

@@ -13,8 +13,10 @@ namespace Backtest {
 
   LobsterReplay::LobsterReplay(const std::string &csv_path,
                                Exchange::MDPMarketUpdateLFQueue *output_queue,
-                               Common::TickerId ticker_id)
+                               Common::TickerId ticker_id,
+                               Exchange::MDPMarketUpdateLFQueue *sim_output_queue)
       : csv_path_(csv_path), output_queue_(output_queue), ticker_id_(ticker_id),
+        sim_output_queue_(sim_output_queue),
         logger_("backtest_lobster_replay.log") {
   }
 
@@ -160,19 +162,27 @@ namespace Backtest {
       me.priority_ = slot;  // dense, monotonically-assigned priorities preserve FIFO order
 
       // Backpressure: the SPSC LFQueue has no overflow check in getNextToWriteTo(), so a
-      // fast producer can wrap and overwrite unread slots. Spin-wait until the consumer
-      // has drained enough room. We target <75% full to stay safely away from the wrap.
-      while (run_ && output_queue_->size() >= Common::ME_MAX_MARKET_UPDATES * 3 / 4) {
+      // fast producer can wrap and overwrite unread slots. Spin-wait until the slowest
+      // consumer has drained enough room. We target <75% full to stay safely away from wrap.
+      while (run_ && (output_queue_->size() >= Common::ME_MAX_MARKET_UPDATES * 3 / 4
+                   || (sim_output_queue_ && sim_output_queue_->size() >= Common::ME_MAX_MARKET_UPDATES * 3 / 4))) {
         std::this_thread::yield();
       }
 
       // Busy-wait push — output_queue is drained by MDC replay thread, should not block long.
-      auto *out = output_queue_->getNextToWriteTo();
       MDPMarketUpdate mdp{};
       mdp.seq_num_ = seq_num++;
       mdp.me_market_update_ = me;
-      *out = mdp;
-      output_queue_->updateWriteIndex();
+      {
+        auto *out = output_queue_->getNextToWriteTo();
+        *out = mdp;
+        output_queue_->updateWriteIndex();
+      }
+      if (sim_output_queue_) {
+        auto *sim_out = sim_output_queue_->getNextToWriteTo();
+        *sim_out = mdp;
+        sim_output_queue_->updateWriteIndex();
+      }
       ++rows_emitted_;
 
       if (emit_then_forget) {

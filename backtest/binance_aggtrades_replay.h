@@ -46,9 +46,12 @@ namespace Backtest {
     /// that FillSimulator never hits the opposite-side qty cap on realistic strategy clips.
     static constexpr Common::Qty SYNTHETIC_SIDE_QTY = 1'000'000;
 
+    /// `sim_output_queue` is optional — see LobsterReplay. Symmetric interface; the Binance
+    /// path runs FillSimulator in AGGRESSIVE_ONLY mode so this queue is typically unused.
     BinanceAggTradesReplay(const std::string &csv_path,
                            Exchange::MDPMarketUpdateLFQueue *output_queue,
-                           Common::TickerId ticker_id);
+                           Common::TickerId ticker_id,
+                           Exchange::MDPMarketUpdateLFQueue *sim_output_queue = nullptr);
 
     ~BinanceAggTradesReplay();
 
@@ -70,6 +73,7 @@ namespace Backtest {
     const std::string csv_path_;
     Exchange::MDPMarketUpdateLFQueue *output_queue_;
     const Common::TickerId ticker_id_;
+    Exchange::MDPMarketUpdateLFQueue *sim_output_queue_ = nullptr;
 
     std::thread *thread_ = nullptr;
     volatile bool run_ = false;
