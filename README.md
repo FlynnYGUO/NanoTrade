@@ -192,8 +192,8 @@ for distribution plots and debug-vs-release comparison.
 
 | Path | p50 | p90 | p99 | p99.9 |
 |---|---|---|---|---|
-| ME `processClientRequest` (mixed, crosses book) | 119 ns | 337 ns | 613 ns | 1.7 µs |
-| ME order add (no-cross, resting) | 84 ns | 89 ns | 172 ns | 1.1 µs |
+| ME `processClientRequest` (mixed, crosses book) | 122 ns | 345 ns | 614 ns | 1.3 µs |
+| ME order add (no-cross, resting) | 89 ns | 95 ns | 144 ns | 948 ns |
 
 ![Debug vs Release histogram](benchmarks/results/latency_debug_vs_release_hist.png)
 
@@ -206,6 +206,10 @@ for distribution plots and debug-vs-release comparison.
   evaluating their arguments. Debug build of the same code path measures p50 ~74 µs,
   so logging overhead dominated the original numbers by ~3 orders of magnitude.
 - Compiled with `-O3 -march=native -DNDEBUG -fno-omit-frame-pointer`.
+- Order-book price hash is a dense `price - base_price_` offset into a per-book array
+  (Phase 1.3A — replaced an earlier `price % N` modulo hash that silently collided on
+  real market data). Subtract is cheaper than modulo on x86, which pushed the
+  no-cross p99 down from 172 ns to 144 ns and p99.9 from 1.1 µs to 948 ns.
 
 **Tail caveat**: `max` samples (~140 µs) are WSL2 hypervisor preemption events observed
 during development — the virtual CPU is briefly descheduled by Hyper-V. These are an
